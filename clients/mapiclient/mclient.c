@@ -2129,7 +2129,8 @@ showCommands(void)
 		mnstr_printf(toConsole, "\\a       - disable auto commit\n");
 	}
 	mnstr_printf(toConsole, "\\e       - echo the query in sql formatting mode\n");
-	mnstr_printf(toConsole, "\\t       - set the timer {none,clock,performance} (none is default)\n");
+    mnstr_printf(toConsole, "\\v       - edit the current command using $EDITOR\n");
+    mnstr_printf(toConsole, "\\t       - set the timer {none,clock,performance} (none is default)\n");
 	mnstr_printf(toConsole, "\\f       - format using renderer {csv,tab,raw,sql,xml,trash,rowcount,expanded}\n");
 	mnstr_printf(toConsole, "\\w#      - set maximal page width (-1=unlimited, 0=terminal width, >0=limit to num)\n");
 	mnstr_printf(toConsole, "\\r#      - set maximum rows per page (-1=raw)\n");
@@ -2771,6 +2772,76 @@ doFile(Mapi mid, stream *fp, bool useinserts, bool interactive, int save_history
 				case 'e':
 					echoquery = true;
 					continue;
+				case 'v': {
+					char tmpfilename[1024];
+					char* separator = "/";
+					const char *editor;
+					char *sys;
+					int	result;
+					stream *s;
+
+#ifndef WIN32
+                    const char *tmpdir = getenv("TMPDIR");
+                    if (!tmpdir) {
+                        tmpdir = "/tmp";
+					}
+
+#else
+                    char tmpdir[MAXPGPATH];
+                    if (GetTempPath(MAXPGPATH, tmpdir) == 0) {
+                        fprintf(stderr, "Could not find temporary directory\n");
+						continue;
+					}
+
+                    separator = "";
+#endif
+
+                    snprintf(tmpfilename, sizeof(tmpfilename),
+                        "%s%smclient.%d.sql", tmpdir, separator, (int) getpid());
+
+					editor = getenv("EDITOR");
+					if (!editor) {
+                        editor = getenv("VISUAL");
+                    }
+
+					if (!editor) {
+                        fprintf(stderr, "EDITOR/VISUAL have not been defined\n");
+                        continue;
+                    }
+
+#ifndef WIN32
+                    asprintf(&sys, "exec %s '%s'", editor, (char*) tmpfilename);
+#else
+                    asprintf(&sys, "\"%s\" \"%s\"", editor, (char *) tmpfilename);
+#endif
+
+                    result = system(sys);
+                    if (result == -1 || result == 127) {
+                      fprintf(stderr, "Could not start editor\n");
+                      continue;
+					}
+
+					free(sys);
+
+					/* read commands from file */
+                    if ((s = open_rastream(tmpfilename)) == NULL || mnstr_errnr(s)) {
+                        if (s) {
+                            close_stream(s);
+                        }
+
+                        fprintf(stderr, "%s: cannot open\n", tmpfilename);
+						continue;
+                    }
+
+                    doFile(mid, s, 0, 0, 0);
+
+					/* remove temp file */
+                    if (remove(tmpfilename) == -1) {
+                        fprintf(stderr, "%s: cannot remove\n", tmpfilename);
+                    }
+
+                    continue;
+                }
 				case 'f':
 					while (my_isspace(line[length - 1]))
 						line[--length] = 0;
